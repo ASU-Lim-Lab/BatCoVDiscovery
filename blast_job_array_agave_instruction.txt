@@ -1,0 +1,95 @@
+Job Array - blast multiple files against one or multiple databases:
+
+(1) Create a manifest text file for combinations:
+
+    parallel -k echo {} ::: db1 db2 db3 db4 ::: /dir/to/all/the/*.fasta > manifest
+
+Output: 
+A txt file called manifest with two columns:
+case in the first column: database names
+fasta in the second column: fasta file full names
+
+
+(2) Create a job array script use the above manifest file
+
+################################################################################
+#!/bin/bash
+#SBATCH -c 8            # number of "cores"
+#SBATCH -t 48:00:00     # time in d-hh:mm:ss
+#SBATCH -p serial       # partition
+#SBATCH -q normal       # QOS
+#SBATCH -o slurm.%j.err # file to save job's STDOUT & STDERR (%j = JobId)
+#SBATCH --export=NONE   # Purge the job-submitting shell environment
+#SBATCH --mail-type=FAIL
+#SBATCH --mail-user=name@asu.edu
+ 
+manifest="${1:?ERROR -- must pass a manifest file}"
+ 
+taskid=$SLURM_ARRAY_TASK_ID
+case=$(getline $taskid $manifest | cut -f 1 -d ' ')
+fasta=$(getline $taskid $manifest | cut -f 2 -d ' ')
+ 
+module purge
+module load anaconda/py3
+source activate bat
+# above: setting up sbatch parameters and env
+ 
+base=$(basename -s .fasta $fasta)
+out1=/scratch/name/"$base"_${case}_fmt11.txt
+out2=/scratch/name/"$base"_${case}_fmt6.txt
+ 
+args=(
+ -query $fasta
+ -db /scratch/name/path/db/$case/$case
+ -evalue 1e-3
+ -num_threads $(nproc)
+ -max_target_seqs 5
+ -max_hsps 1
+ -outfmt '11'
+ -out $out1
+)
+blastx "${args[@]}"
+ 
+blast_formatter -archive $out1 -outfmt "6 qseqid sseqid evalue bitscore score pident nident length mismatch qframe qstart qend qlen qcovs sframe sstart send slen" -out $out2
+################################################################################
+
+
+(3) Copy the manifest file to a separate backup directory to prevent overwrite.
+
+
+(4) Run benchmarking first if needed, with the first fasta file:
+
+-a is the sub job number in the job array
+-c will overwrite the core number required in the script
+
+    sbatch -a 1 -c 1 blastx_fasta_array.sh manifest
+    sbatch -a 1 -c 4 blastx_fasta_array.sh manifest
+    sbatch -a 1 -c 8 blastx_fasta_array.sh manifest
+    sbatch -a 1 -c 14 blastx_fasta_array.sh manifest
+    sbatch -a 1 -c 28 blastx_fasta_array.sh manifest
+
+
+
+(5) Run the entire job array:
+
+First find out how many rows there are in the manifest file, it is the total sub job number x:
+
+    sbatch -a 1-x -c 4 blastx_fasta_array.sh manifest
+
+The sbatch script runs from the submitting directory, the manifest file should be in the same directory of submission.
+
+After run, there will be two files generated for each fasta file, one is fmt11 archive file, the other is the readable fmt6 file.
+
+The path used in the codes need to be carefully changed to reflect the actual directory structure.
+
+
+
+(6) Example of making a blast database manually:
+makeblastdb -in /scratch/tianche5/bat/db_input/ipg_all.fasta -title ipg_all -dbtype prot -out bat/db/ipg_all/ipg_all -parse_seqids
+
+Output:
+New DB name:  /scratch/tianche5/bat/db/ipg_all/ipg_all
+New DB title: ipg_all
+
+
+
